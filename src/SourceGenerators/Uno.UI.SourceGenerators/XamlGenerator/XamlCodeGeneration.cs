@@ -41,6 +41,7 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 		private readonly string _configuration;
 		private readonly bool _isDebug;
 		private readonly string _projectDirectory;
+		private readonly string _projectFullPath;
 		private readonly bool _outputSourceComments = true;
 		private readonly RoslynMetadataHelper _metadataHelper;
 
@@ -125,7 +126,8 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 
 			_isDebug = string.Equals(_configuration, "Debug", StringComparison.OrdinalIgnoreCase);
 
-			_projectDirectory = Path.GetDirectoryName(context.GetMSBuildPropertyValue("MSBuildProjectFullPath"));
+			_projectFullPath = context.GetMSBuildPropertyValue("MSBuildProjectFullPath");
+			_projectDirectory = Path.GetDirectoryName(_projectFullPath);
 
 			var xamlItems = context.GetMSBuildItems("Page")
 				.Concat(context.GetMSBuildItems("ApplicationDefinition"));
@@ -199,23 +201,38 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 		/// </summary>
 		private string GetSourceLink(MSBuildItem projectItemInstance)
 		{
-			var value = projectItemInstance.GetMetadataValue("Link");
+			var link = projectItemInstance.GetMetadataValue("Link");
+			var definingProjectFullPath = projectItemInstance.GetMetadataValue("DefiningProjectFullPath");
+			var fullPath = projectItemInstance.GetMetadataValue("FullPath");
 
-#if NETSTANDARD
-			// Both Uno.SourceGeneration uses relative pathrs and Roslyn Generators provide
-			// full paths. Dependents need specific portions so adjust the paths here for now.
-
-			if (value.IsNullOrEmpty())
+			// Reproduce the logic from https://github.com/dotnet/msbuild/blob/e70a3159d64f9ed6ec3b60253ef863fa883a99b1/src/Tasks/AssignLinkMetadata.cs
+			if (link.IsNullOrEmpty())
 			{
-				return Path.IsPathRooted(projectItemInstance.Identity)
-					? projectItemInstance.Identity.TrimStart(_projectDirectory).TrimStart(Path.DirectorySeparatorChar)
-					: projectItemInstance.Identity;
+				if (definingProjectFullPath.IsNullOrEmpty())
+				{
+					// Both Uno.SourceGeneration uses relative paths and Roslyn Generators provide
+					// full paths. Dependents need specific portions so adjust the paths here for now.
+					// For the case of Roslyn generators, DefiningProjectFullPath is not populated on purpose
+					// so that we can adjust paths properly.
+					if (link.IsNullOrEmpty())
+					{
+						return Path.IsPathRooted(projectItemInstance.Identity)
+							? projectItemInstance.Identity.TrimStart(_projectDirectory).TrimStart(Path.DirectorySeparatorChar)
+							: projectItemInstance.Identity;
+					}
+				}
+				else
+				{
+					var definingProjectDirectory = Path.GetDirectoryName(definingProjectFullPath) + Path.DirectorySeparatorChar;
+
+					if (fullPath.StartsWith(definingProjectDirectory, StringComparison.OrdinalIgnoreCase))
+					{
+						link = fullPath.Substring(definingProjectDirectory.Length);
+					}
+				}
 			}
 
-			return value;
-#else
-			return value.IsNullOrEmpty() ? projectItemInstance.Identity : value;
-#endif
+			return link;
 		}
 
 		public KeyValuePair<string, string>[] Generate()
